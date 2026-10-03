@@ -122,6 +122,7 @@ def to_int(s: pd.Series) -> pd.Series:
 def clean_table(name: str, df: pd.DataFrame):
     """Return (cleaned copy, log rows). The raw frame is never modified."""
     d = df.copy().replace(SENT, np.nan)
+    d = d.replace(r"^\s*$", np.nan, regex=True)       # blank / whitespace-only cells are also "no value"
     log = []
     for c in d.columns:                                    # all *Id columns -> nullable ints
         if c.endswith("Id"):
@@ -187,23 +188,49 @@ def flag_non_starters(res: pd.DataFrame) -> pd.Series:
 
 def dedup_results(res: pd.DataFrame):
     """Enforce exactly one row per (raceId, driverId).
-    KEEP-RULE (total order, first row wins):
-      1. a row with grid > 0   -> the car the driver actually STARTED in (pre-race fact, so the choice
-                                  itself cannot leak the outcome);
-      2. lowest positionOrder  -> only to break remaining ties (no grid>0 row, or several);
-      3. lowest resultId       -> deterministic final tie-break.
+
+    Two separate jobs, with different rules about post-race information:
+      (1) WHICH row supplies the pre-race columns (grid, constructorId, number): may use ONLY pre-race facts.
+          Total order, first row wins:
+            a. a row with grid > 0        (a car that actually started)
+            b. lowest grid slot            (pre-race convention when several started cars are candidates)
+            c. constructorId, then number  (arbitrary but outcome-free tie-breaks)
+            d. resultId                    (last resort: reached only if all pre-race columns are identical,
+                                            so it cannot change any feature)
+          positionOrder is NOT used here, and neither is anything correlated with it (resultId is assigned in
+          finishing order in this dataset, hence it is only a last resort).
+      (2) The LABEL `podium`: the target IS the outcome, so it may use post-race data. A driver who shared a
+          car and was credited with a podium finish in either car did finish on the podium:
+          podium = (best positionOrder over ALL the driver's rows in the race) <= 3.
     Returns (kept rows with audit columns, dropped rows)."""
     d = res.reset_index(drop=True).copy()
     d["n_raw_rows"] = d.groupby(KEYS)["resultId"].transform("size").astype("int64")
-    d["best_positionOrder_raw"] = d.groupby(KEYS)["positionOrder"].transform("min")
+    d["best_positionOrder_raw"] = d.groupby(KEYS)["positionOrder"].transform("min")   # used ONLY for the label
     d["_started"] = d["grid"].fillna(0).gt(0).astype(bool)
-    d = d.sort_values(KEYS + ["_started", "positionOrder", "resultId"],
-                      ascending=[True, True, False, True, True], kind="mergesort")
+    d["_grid_key"] = d["grid"].where(d["_started"])                 # NaN (sorted last) when no grid slot
+    d = d.sort_values(KEYS + ["_started", "_grid_key", "constructorId", "number", "resultId"],
+                      ascending=[True, True, False, True, True, True, True], kind="mergesort")
     kept = d.drop_duplicates(KEYS, keep="first")
-    dropped = d.loc[~d.index.isin(kept.index)].drop(columns="_started")
-    kept = kept.drop(columns="_started").assign(shared_drive=lambda x: x["n_raw_rows"] > 1)
+    dropped = d.loc[~d.index.isin(kept.index)].drop(columns=["_started", "_grid_key"])
+    kept = kept.drop(columns=["_started", "_grid_key"])
+    kept = kept.assign(shared_drive=kept["n_raw_rows"] > 1,
+                       podium=(kept["best_positionOrder_raw"] <= 3).astype("int8"))
     kept = kept.sort_values(["raceId", "positionOrder", "driverId"]).reset_index(drop=True)
     return kept, dropped
+
+
+def check_dedup_is_outcome_free(res: pd.DataFrame, seed: int = SEED) -> None:
+    """Executable proof of 'no post-race info in the row choice': scramble every outcome column across rows
+    and verify that the SAME rows are kept. If a future edit lets positionOrder influence the choice,
+    this assertion fails."""
+    rng = np.random.default_rng(seed)
+    shuffled = res.copy()
+    for c in ("positionOrder", "position", "points", "laps", "statusId"):
+        if c in shuffled:
+            shuffled[c] = rng.permutation(shuffled[c].to_numpy())
+    kept_a, _ = dedup_results(res)
+    kept_b, _ = dedup_results(shuffled)
+    assert set(kept_a["resultId"]) == set(kept_b["resultId"]), "row choice depends on post-race columns"
 
 
 
@@ -226,9 +253,13 @@ def prep_qualifying(q: pd.DataFrame):
     return q[KEYS + ["qual_position", "q1_s", "q2_s", "q3_s"]], n_dup
 
 
-def load_clean(data_dir=None, exclude_indy500: bool = True, drop_non_starters: bool = True) -> dict:
+def load_clean(data_dir=None, exclude_indy500: bool = True, drop_non_starters: bool = True,
+               exclude_shared_drives: bool = False) -> dict:
     """THE handoff function. Raw CSV -> typed -> Indy rule -> dedup -> non-starter rule -> split into
     a PRE-RACE base table and a POST-RACE outcomes table (never use outcomes columns as features).
+    exclude_shared_drives=True additionally drops every (race, driver) that had >1 raw result row (1950s
+    car swaps); default False keeps them (flagged shared_drive=True in `outcomes`). The label `podium` uses the
+    driver's best result across his rows; the pre-race columns come from ONE row chosen without any outcome.
 
     Returns dict with:
       model_base : one row per (raceId, driverId): pre-race columns + target `podium`
@@ -252,6 +283,7 @@ def load_clean(data_dir=None, exclude_indy500: bool = True, drop_non_starters: b
     if exclude_indy500:
         meta["indy500_rows_removed"] = int(res["is_indy500"].sum())
         res = res[~res["is_indy500"]]
+    check_dedup_is_outcome_free(res)
     res, dup_dropped = dedup_results(res)
     meta["duplicate_rows_removed"] = len(dup_dropped)
     res["is_non_starter"] = flag_non_starters(res)
@@ -260,6 +292,10 @@ def load_clean(data_dir=None, exclude_indy500: bool = True, drop_non_starters: b
     if drop_non_starters:
         res = res[~res["is_non_starter"]]
     res = res.reset_index(drop=True)
+    meta["shared_drive_rows_removed"] = 0
+    if exclude_shared_drives:      # optional: the kept row of a shared drive may carry the teammate's car
+        meta["shared_drive_rows_removed"] = int(res["shared_drive"].sum())
+        res = res[~res["shared_drive"]].reset_index(drop=True)
     meta["final_rows"] = len(res)
 
     q, meta["qualifying_duplicate_rows_dropped"] = prep_qualifying(T["qualifying"])
@@ -267,9 +303,7 @@ def load_clean(data_dir=None, exclude_indy500: bool = True, drop_non_starters: b
     base = res.merge(q, on=KEYS, how="left", validate="1:1", indicator="_q")
     base["has_qualifying"] = base["_q"].eq("both")
     base = base.drop(columns="_q")
-    outcomes = base[[c for c in OUTCOME_COLS if c != "podium" and c in base]].copy()
-    outcomes["podium"] = (outcomes["positionOrder"] <= 3).astype("int8")
-    outcomes = outcomes[OUTCOME_COLS]
+    outcomes = base[OUTCOME_COLS].copy()
     model_base = base[PRE_RACE_COLS].copy()
     model_base["podium"] = outcomes["podium"].values
 
