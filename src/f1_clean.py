@@ -1,79 +1,44 @@
-"""f1_clean.py - shared cleaning pipeline for the CSEN903 F1 podium project.
-Usage: from f1_clean import load_clean; clean = load_clean()   # DATA_DIR resolved automatically
-Generated from the same code blocks as main.ipynb sections 1, 4, 5, 6 and 8. Do not edit by hand."""
+"""f1_clean.py: shared cleaning code for the F1 podium project.
+Usage: from f1_clean import load_clean; clean = load_clean()
+Same code as the notebook (sections 1, 4, 5, 6, 8)."""
 
-import os, re, random, warnings
+import os, random
 from pathlib import Path
 import numpy as np
 import pandas as pd
 
 SEED = 42
-SENT = "\\N"          # the literal two-character sentinel used by the Ergast CSVs: backslash + N
-KEYS = ["raceId", "driverId"]   # grain of the modeling table
-TABLES = ["circuits", "constructors", "constructor_results", "constructor_standings",
-          "drivers", "driver_standings", "races", "results", "qualifying", "lap_times",
-          "pit_stops", "sprint_results", "seasons", "status"]
+random.seed(SEED)
+np.random.seed(SEED)
+
+SENT = "\\N"                    # the CSVs write a missing value as the text \N
+KEYS = ["raceId", "driverId"]   # one row per driver per race
+TABLES = ["circuits", "constructors", "constructor_results", "constructor_standings", "drivers",
+          "driver_standings", "races", "results", "qualifying", "lap_times", "pit_stops",
+          "sprint_results", "seasons", "status"]
 
 
-def set_all_seeds(seed: int = SEED) -> None:
-    """Fix every RNG we might touch. Torch/TF are optional (P4 will use one of them)."""
-    random.seed(seed)
-    np.random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    try:
-        import torch
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    except Exception:
-        pass
-    try:
-        import tensorflow as tf
-        tf.random.set_seed(seed)
-    except Exception:
-        pass
+def find_data_dir():
+    """Works on Kaggle (/kaggle/input/...) and on a laptop (data/raw)."""
+    folders = [Path("data/raw"), Path("../data/raw"), Path("data"), Path(".")]
+    if Path("/kaggle/input").exists():
+        folders = [p.parent for p in Path("/kaggle/input").rglob("races.csv")] + folders
+    for folder in folders:
+        if all((folder / f"{t}.csv").exists() for t in TABLES):
+            return folder
+    raise FileNotFoundError("F1 CSV files not found. Add the Kaggle dataset or put the CSVs in data/raw/")
 
 
-def _has_data(p: Path) -> bool:
-    return p.is_dir() and all((p / f"{t}.csv").exists() for t in TABLES)
-
-
-def resolve_data_dir() -> Path:
-    """Find the folder holding the 14 CSVs, on Kaggle or locally, with no manual edits.
-    Order: F1_DATA_DIR env var -> any /kaggle/input/**/races.csv -> common local folders."""
-    candidates = []
-    if os.environ.get("F1_DATA_DIR"):
-        candidates.append(Path(os.environ["F1_DATA_DIR"]))
-    kaggle_root = Path("/kaggle/input")
-    if kaggle_root.exists():
-        candidates += [p.parent for p in sorted(kaggle_root.rglob("races.csv"))]
-    candidates += [Path(p) for p in ("data/raw", "../data/raw", "data", "../data", ".")]
-    for p in candidates:
-        if _has_data(p):
-            return p.resolve()
-    raise FileNotFoundError(
-        "Could not find the 14 F1 CSVs. On Kaggle: attach the dataset "
-        "'rohanrao/formula-1-world-championship-1950-2020' via 'Add Data'. "
-        "Locally: put the CSVs in data/raw/ or set the F1_DATA_DIR environment variable.")
-
-
-def _read_csv_raw(path: Path) -> pd.DataFrame:
-    # dtype=str + keep_default_na=False: nothing is guessed, nothing is silently turned into NaN.
-    # The raw file is therefore reproduced exactly, including every literal "\N".
-    kw = dict(dtype=str, keep_default_na=False, na_values=[])
-    try:
-        return pd.read_csv(path, encoding="utf-8", **kw)
-    except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="latin-1", **kw)
-
-
-def read_raw_tables(data_dir) -> dict:
-    return {t: _read_csv_raw(Path(data_dir) / f"{t}.csv") for t in TABLES}
+def load_raw_tables(data_dir):
+    """Read every CSV as plain text so nothing is guessed or silently changed."""
+    raw = {}
+    for t in TABLES:
+        raw[t] = pd.read_csv(Path(data_dir) / f"{t}.csv", dtype=str, keep_default_na=False,
+                             encoding_errors="replace")
+    return raw
 
 
 
-# ---- Semantic typing specification (explicit > guessed) -------------------------------------
 INT_COLS = {
     "races": ["year", "round"], "seasons": ["year"], "drivers": ["number"],
     "constructor_standings": ["position", "wins"], "driver_standings": ["position", "wins"],
@@ -92,7 +57,7 @@ DATE_COLS = {
     "races": ["date", "fp1_date", "fp2_date", "fp3_date", "quali_date", "sprint_date"],
     "drivers": ["dob"],
 }
-LAPTIME_COLS = {   # table -> {source string column: new numeric-seconds column}
+TIME_COLS = {   # text lap times -> seconds (old column: new column)
     "results": {"fastestLapTime": "fastestLapTime_s"},
     "sprint_results": {"fastestLapTime": "fastestLapTime_s"},
     "qualifying": {"q1": "q1_s", "q2": "q2_s", "q3": "q3_s"},
@@ -100,218 +65,136 @@ LAPTIME_COLS = {   # table -> {source string column: new numeric-seconds column}
     "pit_stops": {"duration": "duration_s"},
 }
 
-_LAP_RE = r"^(?:(?:(\d+):)?(\d+):)?(\d+(?:\.\d+)?)$"   # [h:][m:]s[.fff]
+
+def to_seconds(s):
+    """'1:27.452' -> 87.452 (also handles '59.3' and '1:02:03.5'). Anything else -> NaN."""
+    parts = s.astype("string").str.extract(r"^(?:(?:(\d+):)?(\d+):)?(\d+(?:\.\d+)?)$")
+    hours = pd.to_numeric(parts[0]).fillna(0)
+    minutes = pd.to_numeric(parts[1]).fillna(0)
+    seconds = pd.to_numeric(parts[2])
+    return (hours * 3600 + minutes * 60 + seconds).astype("float64")
 
 
-def laptime_to_seconds(s: pd.Series) -> pd.Series:
-    """'1:27.452' -> 87.452 ; '59.3' -> 59.3 ; '1:02:03.5' -> 3723.5 ; NaN/garbage -> NaN."""
-    parts = s.astype("string").str.extract(_LAP_RE)
-    h = pd.to_numeric(parts[0]).fillna(0)
-    m = pd.to_numeric(parts[1]).fillna(0)
-    sec = pd.to_numeric(parts[2])
-    return (h * 3600 + m * 60 + sec).astype("float64")
-
-
-def to_int(s: pd.Series) -> pd.Series:
-    n = pd.to_numeric(s, errors="coerce")
-    if (n.notna() & (n % 1 != 0)).any():
-        warnings.warn(f"non-integer values rounded in column {s.name}")
-    return n.round().astype("Int64")      # nullable Int64 keeps NaN without turning ints into floats
-
-
-def clean_table(name: str, df: pd.DataFrame):
-    """Return (cleaned copy, log rows). The raw frame is never modified."""
-    d = df.copy().replace(SENT, np.nan)
-    d = d.replace(r"^\s*$", np.nan, regex=True)       # blank / whitespace-only cells are also "no value"
-    log = []
-    for c in d.columns:                                    # all *Id columns -> nullable ints
-        if c.endswith("Id"):
-            d[c] = to_int(d[c])
-    for c in INT_COLS.get(name, []):
-        if c in d: d[c] = to_int(d[c])
-    for c in FLOAT_COLS.get(name, []):
-        if c in d: d[c] = pd.to_numeric(d[c], errors="coerce").astype("float64")
-    for c in DATE_COLS.get(name, []):
-        if c in d:
-            before = d[c].notna().sum()
-            d[c] = pd.to_datetime(d[c], format="%Y-%m-%d", errors="coerce")
-            log.append(dict(table=name, column=c, op="to_datetime", non_null_before=int(before),
-                            non_null_after=int(d[c].notna().sum())))
-    for src, dst in LAPTIME_COLS.get(name, {}).items():
-        if src in d:
-            before = d[src].notna().sum()
-            d[dst] = laptime_to_seconds(d[src])
-            log.append(dict(table=name, column=f"{src}->{dst}", op="laptime_to_seconds",
-                            non_null_before=int(before), non_null_after=int(d[dst].notna().sum())))
-            d = d.drop(columns=[src])           # keep one canonical column: numeric seconds
-    if name == "races" and {"date", "time"} <= set(d.columns):   # scheduled start, known pre-race
-        stamp = d["date"].dt.strftime("%Y-%m-%d") + " " + d["time"].astype("string")
-        d["race_start_utc"] = pd.to_datetime(stamp, errors="coerce")
-    return d, log
-
-
-def clean_all(raw: dict):
-    out, logs = {}, []
+def clean_tables(raw):
+    """Return cleaned copies of all tables. The raw tables are not touched."""
+    clean = {}
     for name, df in raw.items():
-        out[name], lg = clean_table(name, df)
-        logs += lg
-    return out, pd.DataFrame(logs)
+        d = df.replace(SENT, np.nan)                      # \N -> NaN
+        d = d.replace(r"^\s*$", np.nan, regex=True)       # blank cells are missing too
+        for c in d.columns:                               # ids and counts -> integers (can hold NaN)
+            if c.endswith("Id") or c in INT_COLS.get(name, []):
+                d[c] = pd.to_numeric(d[c], errors="coerce").round().astype("Int64")
+        for c in FLOAT_COLS.get(name, []):
+            if c in d.columns:
+                d[c] = pd.to_numeric(d[c], errors="coerce")
+        for c in DATE_COLS.get(name, []):                 # text -> real dates
+            if c in d.columns:
+                d[c] = pd.to_datetime(d[c], format="%Y-%m-%d", errors="coerce")
+        for old, new in TIME_COLS.get(name, {}).items():  # text lap times -> seconds
+            if old in d.columns:
+                d[new] = to_seconds(d[old])
+                d = d.drop(columns=[old])
+        clean[name] = d
+    return clean
 
 
 
-# ---- Population rules ------------------------------------------------------------------------
-INDY_YEARS = (1950, 1960)
-NONSTART_POSITION_TEXT = {"F", "W"}          # F = failed to qualify, W = withdrawn
-NONSTART_STATUS_RE = r"did not (?:pre)?qualify|not qualified|withdrew|107%"
+def flag_indy500(races, circuits):
+    """Mark the Indianapolis 500 rounds that counted for the championship (1950-1960).
+    The same circuit hosted a real F1 US Grand Prix in 2000-2007, so we also check the year."""
+    races = races.copy()
+    indy_ids = circuits.loc[circuits["name"].str.contains("Indianapolis", na=False), "circuitId"]
+    by_name = races["name"].str.contains("Indianapolis 500", na=False)
+    by_place = races["circuitId"].isin(indy_ids) & races["year"].between(1950, 1960)
+    races["is_indy500"] = (by_name | by_place).astype(bool)
+    return races
 
 
-def flag_races(races: pd.DataFrame, circuits: pd.DataFrame) -> pd.DataFrame:
-    """Add is_indy500: the 1950-1960 Indianapolis 500 rounds that counted for the F1 championship.
-    NOTE: the same Indianapolis circuit hosted a real F1 US GP in 2000-2007 -> keep those (year filter)."""
-    r = races.copy()
-    indy_ids = circuits.loc[
-        circuits["name"].str.contains("Indianapolis", case=False, na=False)
-        | circuits["circuitRef"].str.contains("indianapolis", case=False, na=False), "circuitId"]
-    by_name = r["name"].str.contains("Indianapolis 500", case=False, na=False)
-    by_venue = r["circuitId"].isin(indy_ids) & r["year"].between(*INDY_YEARS)
-    r["is_indy500"] = (by_name | by_venue).astype(bool)
-    return r
+def find_non_starters(res):
+    """Drivers who did not qualify / withdrew. Only uses facts known before the race."""
+    by_code = res["positionText"].isin(["F", "W"])      # F = failed to qualify, W = withdrew
+    by_status = res["status"].str.contains("did not (?:pre)?qualify|not qualified|withdrew|107%",
+                                           case=False, regex=True, na=False)
+    return (by_code | by_status).astype(bool)
 
 
-def flag_non_starters(res: pd.DataFrame) -> pd.Series:
-    """DNQ / DNPQ / withdrawn / 107%-rule rows. Uses only facts that are settled BEFORE lights-out
-    (who failed to qualify or withdrew) - never laps or finishing status of drivers who did race."""
-    by_text = res["positionText"].isin(NONSTART_POSITION_TEXT)
-    by_status = res["status"].str.contains(NONSTART_STATUS_RE, case=False, regex=True, na=False)
-    return (by_text | by_status).astype(bool)
-
-
-def dedup_results(res: pd.DataFrame):
-    """Enforce exactly one row per (raceId, driverId).
-
-    Two separate jobs, with different rules about post-race information:
-      (1) WHICH row supplies the pre-race columns (grid, constructorId, number): may use ONLY pre-race facts.
-          Total order, first row wins:
-            a. a row with grid > 0        (a car that actually started)
-            b. lowest grid slot            (pre-race convention when several started cars are candidates)
-            c. constructorId, then number  (arbitrary but outcome-free tie-breaks)
-            d. resultId                    (last resort: reached only if all pre-race columns are identical,
-                                            so it cannot change any feature)
-          positionOrder is NOT used here, and neither is anything correlated with it (resultId is assigned in
-          finishing order in this dataset, hence it is only a last resort).
-      (2) The LABEL `podium`: the target IS the outcome, so it may use post-race data. A driver who shared a
-          car and was credited with a podium finish in either car did finish on the podium:
-          podium = (best positionOrder over ALL the driver's rows in the race) <= 3.
-    Returns (kept rows with audit columns, dropped rows)."""
-    d = res.reset_index(drop=True).copy()
-    d["n_raw_rows"] = d.groupby(KEYS)["resultId"].transform("size").astype("int64")
-    d["best_positionOrder_raw"] = d.groupby(KEYS)["positionOrder"].transform("min")   # used ONLY for the label
-    d["_started"] = d["grid"].fillna(0).gt(0).astype(bool)
-    d["_grid_key"] = d["grid"].where(d["_started"])                 # NaN (sorted last) when no grid slot
-    d = d.sort_values(KEYS + ["_started", "_grid_key", "constructorId", "number", "resultId"],
-                      ascending=[True, True, False, True, True, True, True], kind="mergesort")
-    kept = d.drop_duplicates(KEYS, keep="first")
-    dropped = d.loc[~d.index.isin(kept.index)].drop(columns=["_started", "_grid_key"])
-    kept = kept.drop(columns=["_started", "_grid_key"])
-    kept = kept.assign(shared_drive=kept["n_raw_rows"] > 1,
-                       podium=(kept["best_positionOrder_raw"] <= 3).astype("int8"))
-    kept = kept.sort_values(["raceId", "positionOrder", "driverId"]).reset_index(drop=True)
-    return kept, dropped
-
-
-def check_dedup_is_outcome_free(res: pd.DataFrame, seed: int = SEED) -> None:
-    """Executable proof of 'no post-race info in the row choice': scramble every outcome column across rows
-    and verify that the SAME rows are kept. If a future edit lets positionOrder influence the choice,
-    this assertion fails."""
-    rng = np.random.default_rng(seed)
-    shuffled = res.copy()
-    for c in ("positionOrder", "position", "points", "laps", "statusId"):
-        if c in shuffled:
-            shuffled[c] = rng.permutation(shuffled[c].to_numpy())
-    kept_a, _ = dedup_results(res)
-    kept_b, _ = dedup_results(shuffled)
-    assert set(kept_a["resultId"]) == set(kept_b["resultId"]), "row choice depends on post-race columns"
+def keep_one_row_per_driver(res):
+    """One row per (raceId, driverId).
+    WHICH row we keep uses only facts known before the race (never the finishing position):
+      1) a car that really started (grid > 0), 2) the lowest grid slot, 3) constructorId, car number,
+      4) resultId only as a last resort (rows that look identical before the race).
+    The LABEL is different: podium = the driver's best finish over all his rows <= 3."""
+    res = res.reset_index(drop=True).copy()
+    res["n_raw_rows"] = res.groupby(KEYS)["resultId"].transform("size")
+    res["best_positionOrder"] = res.groupby(KEYS)["positionOrder"].transform("min")
+    res["started"] = res["grid"].fillna(0) > 0
+    res["grid_for_sort"] = res["grid"].where(res["started"])
+    res = res.sort_values(KEYS + ["started", "grid_for_sort", "constructorId", "number", "resultId"],
+                          ascending=[True, True, False, True, True, True, True], kind="mergesort")
+    kept = res.drop_duplicates(KEYS, keep="first")
+    dropped = res.drop(kept.index).drop(columns=["started", "grid_for_sort"])
+    kept = kept.drop(columns=["started", "grid_for_sort"]).copy()
+    kept["shared_drive"] = kept["n_raw_rows"] > 1
+    kept["podium"] = (kept["best_positionOrder"] <= 3).astype("int8")
+    return kept.reset_index(drop=True), dropped
 
 
 
-# ---- Column contracts: what is allowed to become a FEATURE vs. what is outcome-only ---------------
 PRE_RACE_COLS = ["raceId", "driverId", "constructorId", "year", "round", "date", "circuitId", "number",
                  "grid", "pitlane_start", "has_qualifying", "qual_position", "q1_s", "q2_s", "q3_s"]
 OUTCOME_COLS = ["raceId", "driverId", "resultId", "positionOrder", "podium", "positionText", "position",
                 "points", "laps", "time", "milliseconds", "fastestLap", "rank", "fastestLapTime_s",
-                "fastestLapSpeed", "statusId", "status", "n_raw_rows", "shared_drive", "best_positionOrder_raw"]
-FORBIDDEN_IN_BASE = {"positionOrder", "positionText", "position", "points", "laps", "time", "milliseconds",
-                     "fastestLap", "rank", "fastestLapTime", "fastestLapTime_s", "fastestLapSpeed",
-                     "statusId", "status", "resultId", "n_raw_rows", "shared_drive", "best_positionOrder_raw"}
+                "fastestLapSpeed", "statusId", "status", "n_raw_rows", "shared_drive", "best_positionOrder"]
+POST_RACE_COLS = {"positionOrder", "positionText", "position", "points", "laps", "time", "milliseconds",
+                  "fastestLap", "rank", "fastestLapTime_s", "fastestLapSpeed", "statusId", "status",
+                  "resultId", "n_raw_rows", "shared_drive", "best_positionOrder"}
 
 
-def prep_qualifying(q: pd.DataFrame):
-    """Qualifying should be unique per (raceId, driverId); if not, keep the highest qualifyId."""
-    q = q.sort_values("qualifyId")
-    n_dup = int(q.duplicated(KEYS, keep="last").sum())
-    q = q.drop_duplicates(KEYS, keep="last").rename(columns={"position": "qual_position"})
-    return q[KEYS + ["qual_position", "q1_s", "q2_s", "q3_s"]], n_dup
+def load_clean(data_dir=None, exclude_indy500=True, drop_non_starters=True, exclude_shared_drives=False):
+    """Raw CSVs -> clean tables. Everybody on the team should start from this function.
+    model_base = pre-race columns + target `podium` (one row per driver per race)
+    outcomes   = post-race columns (status, points, ...) - never use these as features."""
+    random.seed(SEED)
+    np.random.seed(SEED)
+    tables = clean_tables(load_raw_tables(data_dir or find_data_dir()))
+    tables["races"] = flag_indy500(tables["races"], tables["circuits"])
 
-
-def load_clean(data_dir=None, exclude_indy500: bool = True, drop_non_starters: bool = True,
-               exclude_shared_drives: bool = False) -> dict:
-    """THE handoff function. Raw CSV -> typed -> Indy rule -> dedup -> non-starter rule -> split into
-    a PRE-RACE base table and a POST-RACE outcomes table (never use outcomes columns as features).
-    exclude_shared_drives=True additionally drops every (race, driver) that had >1 raw result row (1950s
-    car swaps); default False keeps them (flagged shared_drive=True in `outcomes`). The label `podium` uses the
-    driver's best result across his rows; the pre-race columns come from ONE row chosen without any outcome.
-
-    Returns dict with:
-      model_base : one row per (raceId, driverId): pre-race columns + target `podium`
-      outcomes   : same grain, post-race columns (status, points, positions...) for DE questions / audits
-      non_starters, dup_dropped : rows removed, kept for audit
-      tables     : every other typed table (races incl. is_indy500, circuits, drivers, constructors, status,
-                   qualifying, *_standings (post-race! shift before use), lap_times, pit_stops, ...)
-      meta       : row accounting for every filtering step
-    """
-    set_all_seeds(SEED)
-    data_dir = Path(data_dir) if data_dir else resolve_data_dir()
-    T, _ = clean_all(read_raw_tables(data_dir))
-    T["races"] = flag_races(T["races"], T["circuits"])
-
-    res = (T["results"]
-           .merge(T["races"][["raceId", "year", "round", "date", "circuitId", "is_indy500"]],
-                  on="raceId", how="inner", validate="m:1")
-           .merge(T["status"], on="statusId", how="left", validate="m:1"))
-    meta = {"raw_result_rows": len(T["results"]), "rows_after_race_join": len(res)}
+    res = tables["results"].merge(tables["races"][["raceId", "year", "round", "date", "circuitId", "is_indy500"]],
+                                  on="raceId", how="inner")
+    res = res.merge(tables["status"], on="statusId", how="left")
+    meta = {"raw_result_rows": len(tables["results"]), "after_race_join": len(res)}
 
     if exclude_indy500:
         meta["indy500_rows_removed"] = int(res["is_indy500"].sum())
         res = res[~res["is_indy500"]]
-    check_dedup_is_outcome_free(res)
-    res, dup_dropped = dedup_results(res)
-    meta["duplicate_rows_removed"] = len(dup_dropped)
-    res["is_non_starter"] = flag_non_starters(res)
-    non_starters = res[res["is_non_starter"]].copy()
-    meta["non_starter_rows_removed"] = len(non_starters) if drop_non_starters else 0
+    res, dropped = keep_one_row_per_driver(res)
+    meta["duplicate_rows_removed"] = len(dropped)
+    res["is_non_starter"] = find_non_starters(res)
     if drop_non_starters:
+        meta["non_starter_rows_removed"] = int(res["is_non_starter"].sum())
         res = res[~res["is_non_starter"]]
-    res = res.reset_index(drop=True)
-    meta["shared_drive_rows_removed"] = 0
-    if exclude_shared_drives:      # optional: the kept row of a shared drive may carry the teammate's car
+    if exclude_shared_drives:
         meta["shared_drive_rows_removed"] = int(res["shared_drive"].sum())
-        res = res[~res["shared_drive"]].reset_index(drop=True)
+        res = res[~res["shared_drive"]]
+    res = res.reset_index(drop=True)
     meta["final_rows"] = len(res)
 
-    q, meta["qualifying_duplicate_rows_dropped"] = prep_qualifying(T["qualifying"])
-    res["pitlane_start"] = res["grid"].eq(0).fillna(False).astype(bool)   # grid==0 among actual starters
-    base = res.merge(q, on=KEYS, how="left", validate="1:1", indicator="_q")
-    base["has_qualifying"] = base["_q"].eq("both")
-    base = base.drop(columns="_q")
-    outcomes = base[OUTCOME_COLS].copy()
-    model_base = base[PRE_RACE_COLS].copy()
-    model_base["podium"] = outcomes["podium"].values
+    quali = tables["qualifying"].sort_values("qualifyId")
+    meta["qualifying_duplicates_dropped"] = int(quali.duplicated(KEYS, keep="last").sum())
+    quali = quali.drop_duplicates(KEYS, keep="last").rename(columns={"position": "qual_position"})
+    quali = quali[KEYS + ["qual_position", "q1_s", "q2_s", "q3_s"]]
 
-    # ---- hard guarantees every teammate can rely on -----------------------------------------------
-    assert not model_base.duplicated(KEYS).any(), "grain violated: duplicate (raceId, driverId)"
-    assert model_base[KEYS].notna().all().all(), "null key in modeling table"
-    assert not (FORBIDDEN_IN_BASE & set(model_base.columns)), "post-race column leaked into base table"
-    assert len(model_base) == len(outcomes) == meta["final_rows"]
-    return dict(model_base=model_base, outcomes=outcomes, non_starters=non_starters,
-                dup_dropped=dup_dropped, tables=T, meta=meta)
+    res["pitlane_start"] = (res["grid"] == 0).fillna(False).astype(bool)
+    base = res.merge(quali, on=KEYS, how="left", indicator=True)
+    base["has_qualifying"] = base["_merge"] == "both"
+
+    model_base = base[PRE_RACE_COLS].copy()
+    model_base["podium"] = base["podium"].values
+    outcomes = base[OUTCOME_COLS].copy()
+
+    # safety checks
+    assert not model_base.duplicated(KEYS).any(), "more than one row for a driver in a race"
+    assert model_base[KEYS].notna().all().all(), "missing key"
+    assert not (POST_RACE_COLS & set(model_base.columns)), "post-race column in the base table"
+    return {"model_base": model_base, "outcomes": outcomes, "tables": tables, "meta": meta}
 
