@@ -1,0 +1,12 @@
+# raw data + local checkpoints (raw CSVs stay immutable and out of git)
+data/raw/
+data/**/*.csv
+outputs/
+*.parquet
+*.pkl
+*.h5
+*.pt
+.ipynb_checkpoints/
+__pycache__/
+.venv/
+.DS_Store
