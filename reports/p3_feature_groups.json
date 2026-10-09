@@ -1,0 +1,32 @@
+{
+  "grid": [
+    "grid",
+    "pit_lane_flag"
+  ],
+  "qualifying": [
+    "qual_position",
+    "best_qual_s",
+    "gap_to_pole_pct",
+    "reached_q2",
+    "reached_q3",
+    "qual_format"
+  ],
+  "standings": [
+    "pts_before",
+    "pos_before",
+    "cons_pts_before",
+    "cons_pos_before"
+  ],
+  "form": [
+    "driver_form5",
+    "constructor_form5"
+  ],
+  "circuit": [
+    "circuit_starts_before",
+    "circuit_podiums_before"
+  ],
+  "context": [
+    "home_flag",
+    "era"
+  ]
+}
