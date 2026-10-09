@@ -8,3 +8,5 @@ nbformat
 nbconvert
 ipykernel
 torch
+shap
+lime
