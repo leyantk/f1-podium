@@ -10,3 +10,4 @@ outputs/
 __pycache__/
 .venv/
 .DS_Store
+reports/p3_modeling_table.csv
