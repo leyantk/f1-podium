@@ -66,6 +66,9 @@ TIME_COLS = {   # text lap times -> seconds (old column: new column)
 }
 
 
+MAX_QUALI_LAP_S = 200   # a qualifying lap above 200 s is a data error (one q1 value is 1,002.64 s)
+
+
 def to_seconds(s):
     """'1:27.452' -> 87.452 (also handles '59.3' and '1:02:03.5'). Anything else -> NaN."""
     parts = s.astype("string").str.extract(r"^(?:(?:(\d+):)?(\d+):)?(\d+(?:\.\d+)?)$")
@@ -94,6 +97,9 @@ def clean_tables(raw):
             if old in d.columns:
                 d[new] = to_seconds(d[old])
                 d = d.drop(columns=[old])
+        if name == "qualifying":                          # impossible lap times become missing (not filled in)
+            for c in ["q1_s", "q2_s", "q3_s"]:
+                d[c] = d[c].where(d[c] <= MAX_QUALI_LAP_S)
         clean[name] = d
     return clean
 
