@@ -11,3 +11,7 @@ __pycache__/
 .venv/
 .DS_Store
 reports/p3_modeling_table.csv
+reports/fig_p3_split_balance.png
+*.png
+/reports
+
