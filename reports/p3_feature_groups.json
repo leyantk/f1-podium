@@ -1,13 +1,13 @@
 {
   "grid": [
-    "grid_fixed",
-    "pit_lane_flag"
+    "grid_fixed"
   ],
   "qualifying": [
     "qual_position",
-    "best_qual_s",
     "gap_to_pole_pct",
-    "no_qual_time"
+    "no_qual_time",
+    "qg_q3",
+    "qg_q2_only"
   ],
   "driver_standings": [
     "pts_before",
@@ -18,17 +18,5 @@
     "cons_pts_before",
     "cons_pos_before",
     "cons_standings_missing"
-  ],
-  "circuit": [
-    "circuit_starts_before",
-    "circuit_podiums_before",
-    "circuit_podium_rate",
-    "team_circuit_starts_before",
-    "team_circuit_podiums_before"
-  ],
-  "context": [
-    "home_flag",
-    "era_ordinal",
-    "season_progress"
   ]
 }
