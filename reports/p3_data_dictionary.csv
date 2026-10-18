@@ -1,13 +1,13 @@
 group,feature,source,missing_share,note
 grid,grid_fixed,grid,0.0,Starting slot after penalties; pit-lane starts set to PIT_GRID=35.
-qualifying,qual_position,qualifying,0.5762,Rank in the qualifying session.
-qualifying,gap_to_pole_pct,qualifying,0.5823,Percent slower than the fastest lap in the same race.
+qualifying,qual_position,qualifying,0.5792,Rank in the qualifying session.
+qualifying,gap_to_pole_pct,qualifying,0.5855,Percent slower than the fastest lap in the same race.
 qualifying,no_qual_time,qualifying,0.0,1 if the driver set no qualifying time at all.
 qualifying,qg_q3,qualifying,0.0,1 if the driver reached Q3 (set a Q3 time).
 qualifying,qg_q2_only,qualifying,0.0,1 if the driver's last session was Q2.
 driver_standings,pts_before,driver_standings,0.0,Driver points going into the race.
-driver_standings,pos_before,driver_standings,0.1176,Driver championship position going into the race.
+driver_standings,pos_before,driver_standings,0.1204,Driver championship position going into the race.
 driver_standings,standings_missing,driver_standings,0.0,1 if the driver has no previous standings row this season.
 constructor_standings,cons_pts_before,constructor_standings,0.0,Constructor points going into the race.
-constructor_standings,cons_pos_before,constructor_standings,0.1177,Constructor championship position going into the race.
+constructor_standings,cons_pos_before,constructor_standings,0.1195,Constructor championship position going into the race.
 constructor_standings,cons_standings_missing,constructor_standings,0.0,1 if the constructor has no previous standings row this season.
