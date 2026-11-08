@@ -1,0 +1,5 @@
+# Local only: this repo is public, so real passwords must never be committed.
+config.txt
+
+# The CSVs are copied here locally because the script reads them from its own folder.
+*.csv

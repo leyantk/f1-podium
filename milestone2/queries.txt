@@ -1,0 +1,19 @@
+//1. Query 1
+MATCH (...)
+RETURN (...)
+
+//2. Query 2
+MATCH (...)
+RETURN (...)
+
+//3. Query 3
+MATCH (...)
+RETURN (...)
+
+//4. Query 4
+MATCH (...)
+RETURN (...)
+
+//5. Query 5
+MATCH (...)
+RETURN (...)
