@@ -46,7 +46,8 @@ def read_csv(name):
     Read from BASE_DIR with encoding="utf-8" and csv.DictReader. Do not use
     pandas, which turns 44 into 44.0 in columns with gaps.
     """
-    raise NotImplementedError
+    with open(BASE_DIR / name, encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
 
 
 # ----- P2 -----------------------------------------------------------------
