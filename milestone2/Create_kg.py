@@ -66,22 +66,35 @@ def read_csv(name):
 # ----- P2 -----------------------------------------------------------------
 
 
-def to_int(value):
-    r"""Return value as an int, or None if it is \N or empty."""
-    raise NotImplementedError
+def _is_missing(value):
+    """True for None, empty strings, and the CSV null marker \\N."""
+    return value is None or value.strip() in ("", "\\N")
 
+def to_str(value):
+    """String property. None for missing; otherwise the raw value, unstripped."""
+    if _is_missing(value):
+        return None
+    return value  
+
+def to_int(value):
+    """Return an int, or None if the value is missing."""
+    if _is_missing(value):
+        return None
+    return int(float(value.strip()))  # float() first so "3.0" also works
 
 def to_float(value):
-    r"""Return value as a float, or None if it is \N or empty."""
-    raise NotImplementedError
+    """Return a float, or None if the value is missing."""
+    if _is_missing(value):
+        return None
+    return float(value.strip())
 
 
 def to_date(value):
-    r"""Return a Python date for "YYYY-MM-DD", or None if it is \N or empty.
+    """Return a datetime.date, or None if the value is missing."""
+    if _is_missing(value):
+        return None
+    return date.fromisoformat(value.strip())
 
-    The Neo4j driver stores a Python date as a Neo4j date.
-    """
-    raise NotImplementedError
 
 
 # ----- P3 -----------------------------------------------------------------
