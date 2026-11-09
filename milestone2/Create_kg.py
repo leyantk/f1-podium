@@ -34,7 +34,21 @@ def read_config(path=BASE_DIR / "config.txt"):
     the first "=". The grader's file also has a DATABASE line: ignore it, and
     never hardcode a database name.
     """
-    raise NotImplementedError
+    wanted = {"URI", "USERNAME", "PASSWORD"}
+    config = {}
+
+    # utf-8-sig also accepts files saved with a byte order mark (Windows Notepad).
+    with open(path, encoding="utf-8-sig") as file:
+        for line in file:
+            key, separator, value = line.partition("=")
+            key = key.strip()
+            if separator and key in wanted:
+                config[key] = value.strip()
+
+    missing = wanted - config.keys()
+    if missing:
+        raise ValueError(f"{path} is missing: {', '.join(sorted(missing))}")
+    return config
 
 
 # ----- P4 -----------------------------------------------------------------
