@@ -103,7 +103,12 @@ def to_date(value):
 
 def clean(props):
     """Return a copy of the dict props without the keys whose value is None."""
-    raise NotImplementedError
+    return {key: value for key, value in props.items() if value is not None}
+
+
+def _run_batch(tx, cypher, batch):
+    """Run one batch inside a write transaction (used by run_batched)."""
+    tx.run(cypher, rows=batch).consume()
 
 
 def run_batched(session, cypher, rows, size=5000):
@@ -112,8 +117,16 @@ def run_batched(session, cypher, rows, size=5000):
     Use session.execute_write for each batch. The agreed query pattern is:
     UNWIND $rows AS row MERGE (n:Label {id: row.id}) SET n += row.props
     Then MATCH the parents and MERGE the relationships.
+
+    Each batch is its own transaction, so a 26,759-row CSV never sits in
+    memory as one huge transaction. Returns the number of rows sent.
     """
-    raise NotImplementedError
+    if size < 1:
+        raise ValueError("size must be at least 1")
+    rows = list(rows)
+    for start in range(0, len(rows), size):
+        session.execute_write(_run_batch, cypher, rows[start:start + size])
+    return len(rows)
 
 
 # =============================================================================
