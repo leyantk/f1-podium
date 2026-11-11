@@ -7,8 +7,13 @@ MATCH (...)
 RETURN (...)
 
 //3. Query 3
-MATCH (...)
-RETURN (...)
+MATCH (h:Driver {driverId: 1})<-[:BY_DRIVER]-(rh:Result)-[:FOR_RACE]->(race:Race)<-[:FOR_RACE]-(rb:Result)-[:BY_DRIVER]->(b:Driver {driverId: 822}),
+      (rh)-[:FOR_CONSTRUCTOR]->(c:Constructor)<-[:FOR_CONSTRUCTOR]-(rb)
+RETURN c.constructor_name AS Constructor,
+       count(DISTINCT race) AS Shared_Races,
+       sum(CASE WHEN rh.positionOrder < rb.positionOrder THEN 1 ELSE 0 END) AS Hamilton_Ahead,
+       sum(CASE WHEN rb.positionOrder < rh.positionOrder THEN 1 ELSE 0 END) AS Bottas_Ahead
+ORDER BY Shared_Races DESC
 
 //4. Query 4
 MATCH (...)

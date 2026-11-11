@@ -142,7 +142,27 @@ def load_drivers(session):
     Date: dob
     String: driverRef, code, forename, surname, nationality
     """
-    raise NotImplementedError
+    rows = [
+        {
+            "id": to_int(r["driverId"]),
+            "props": clean({
+                "driverRef": to_str(r["driverRef"]),
+                "number": to_int(r["number"]),
+                "code": to_str(r["code"]),
+                "forename": to_str(r["forename"]),
+                "surname": to_str(r["surname"]),
+                "dob": to_date(r["dob"]),
+                "nationality": to_str(r["nationality"]),
+            }),
+        }
+        for r in read_csv("drivers.csv")
+    ]
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (d:Driver {driverId: row.id})
+    SET d += row.props
+    """
+    return run_batched(session, cypher, rows)
 
 
 def load_status(session):
@@ -151,7 +171,19 @@ def load_status(session):
     Key: statusId (int)
     String: status
     """
-    raise NotImplementedError
+    rows = [
+        {
+            "id": to_int(r["statusId"]),
+            "props": clean({"status": to_str(r["status"])}),
+        }
+        for r in read_csv("status.csv")
+    ]
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (s:Status {statusId: row.id})
+    SET s += row.props
+    """
+    return run_batched(session, cypher, rows)
 
 
 def load_races(session):
@@ -164,7 +196,32 @@ def load_races(session):
     Relationships: (Race)-[:AT_CIRCUIT]->(Circuit), (Race)-[:IN_SEASON]->(Season)
     Do not store circuitId, url, or the fp*, quali_* and sprint_* columns.
     """
-    raise NotImplementedError
+    rows = [
+        {
+            "id": to_int(r["raceId"]),
+            # Used only to find the parent nodes, never stored on the Race.
+            "circuitId": to_int(r["circuitId"]),
+            "year": to_int(r["year"]),
+            "props": clean({
+                "year": to_int(r["year"]),
+                "round": to_int(r["round"]),
+                "name": to_str(r["name"]),
+                "date": to_date(r["date"]),
+                "time": to_str(r["time"]),
+            }),
+        }
+        for r in read_csv("races.csv")
+    ]
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (r:Race {raceId: row.id})
+    SET r += row.props
+    WITH r, row
+    MATCH (c:Circuit {circuitId: row.circuitId}), (s:Season {year: row.year})
+    MERGE (r)-[:AT_CIRCUIT]->(c)
+    MERGE (r)-[:IN_SEASON]->(s)
+    """
+    return run_batched(session, cypher, rows)
 
 
 # =============================================================================
