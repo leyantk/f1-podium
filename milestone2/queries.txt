@@ -11,8 +11,14 @@ MATCH (...)
 RETURN (...)
 
 //4. Query 4
-MATCH (...)
-RETURN (...)
+MATCH (r:Result)-[:FOR_RACE]->(race:Race)-[:AT_CIRCUIT]->(:Circuit {circuitId: 6})
+MATCH (r)-[:BY_DRIVER]->(d:Driver)
+MATCH (r)-[:HAS_STATUS]->(s:Status)
+WHERE race.date < date('2020-01-01') AND NOT s.status IN ['Did not qualify', 'Did not prequalify', 'Withdrew']
+WITH d, count(DISTINCT race) AS Starts, avg(r.positionOrder) AS Avg_Finish, sum(CASE WHEN r.position = 1 THEN 1 ELSE 0 END) AS Wins
+WHERE Starts >= 5
+RETURN d.forename + ' ' + d.surname AS Driver, Starts, Avg_Finish, Wins
+ORDER BY Avg_Finish ASC, Wins DESC
 
 //5. Query 5
 MATCH (...)

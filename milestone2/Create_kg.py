@@ -240,7 +240,39 @@ def load_pitstops(session):
     String: time, duration (values like 16:44.718 exist, never parse as float)
     Relationships: (PitStop)-[:FOR_RACE]->(Race), (PitStop)-[:BY_DRIVER]->(Driver)
     """
-    raise NotImplementedError
+    rows = []
+    for record in read_csv("pit_stops.csv"):
+        race_id = to_int(record["raceId"])
+        driver_id = to_int(record["driverId"])
+        stop = to_int(record["stop"])
+        rows.append(
+            {
+                "eventId": f"{race_id}:{driver_id}:{stop}",
+                "raceId": race_id,
+                "driverId": driver_id,
+                "props": clean(
+                    {
+                        "stop": stop,
+                        "lap": to_int(record["lap"]),
+                        "time": to_str(record["time"]),
+                        "duration": to_str(record["duration"]),
+                        "milliseconds": to_int(record["milliseconds"]),
+                    }
+                ),
+            }
+        )
+
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (p:PitStop {eventId: row.eventId})
+    SET p += row.props
+    WITH p, row
+    MATCH (r:Race {raceId: row.raceId})
+    MATCH (d:Driver {driverId: row.driverId})
+    MERGE (p)-[:FOR_RACE]->(r)
+    MERGE (p)-[:BY_DRIVER]->(d)
+    """
+    return run_batched(session, cypher, rows)
 
 
 def load_seasons(session):
@@ -249,7 +281,13 @@ def load_seasons(session):
     Key: year (int)
     Do not store url.
     """
-    raise NotImplementedError
+    rows = [{"year": to_int(record["year"])} for record in read_csv("seasons.csv")]
+
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (:Season {year: row.year})
+    """
+    return run_batched(session, cypher, rows)
 
 
 def create_constraints(session):
@@ -259,7 +297,22 @@ def create_constraints(session):
     Status.statusId, Race.raceId, Result.resultId, Qualifying.qualifyId,
     PitStop.eventId
     """
-    raise NotImplementedError
+    constraints = [
+        ("Driver", "driverId"),
+        ("Constructor", "constructorId"),
+        ("Circuit", "circuitId"),
+        ("Season", "year"),
+        ("Status", "statusId"),
+        ("Race", "raceId"),
+        ("Result", "resultId"),
+        ("Qualifying", "qualifyId"),
+        ("PitStop", "eventId"),
+    ]
+    for label, prop in constraints:
+        session.run(
+            f"CREATE CONSTRAINT {label.lower()}_{prop.lower()}_unique "
+            f"IF NOT EXISTS FOR (n:{label}) REQUIRE n.{prop} IS UNIQUE"
+        ).consume()
 
 
 def main():
@@ -269,7 +322,30 @@ def main():
     load_constructors, load_circuits, load_races, load_results,
     load_qualifying, load_pitstops.
     """
-    raise NotImplementedError
+    config = read_config()
+    steps = [
+        create_constraints,
+        load_seasons,
+        load_status,
+        load_drivers,
+        load_constructors,
+        load_circuits,
+        load_races,
+        load_results,
+        load_qualifying,
+        load_pitstops,
+    ]
+
+    with GraphDatabase.driver(
+        config["URI"], auth=(config["USERNAME"], config["PASSWORD"])
+    ) as driver:
+        driver.verify_connectivity()
+        with driver.session() as session:
+            for step in steps:
+                print(f"Running {step.__name__} ...")
+                step(session)
+                print(f"Done {step.__name__}")
+    print("Knowledge graph build finished.")
 
 
 if __name__ == "__main__":
