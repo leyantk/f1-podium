@@ -239,7 +239,47 @@ def load_results(session):
     Relationships: (Result)-[:FOR_RACE]->(Race), (Result)-[:BY_DRIVER]->(Driver),
     (Result)-[:FOR_CONSTRUCTOR]->(Constructor), (Result)-[:HAS_STATUS]->(Status)
     """
-    raise NotImplementedError
+    rows = [
+        {
+            "id": to_int(r["resultId"]),
+            # Used only to find the parent nodes, never stored on the Result.
+            "raceId": to_int(r["raceId"]),
+            "driverId": to_int(r["driverId"]),
+            "constructorId": to_int(r["constructorId"]),
+            "statusId": to_int(r["statusId"]),
+            "props": clean({
+                "number": to_int(r["number"]),
+                "grid": to_int(r["grid"]),
+                "position": to_int(r["position"]),
+                "positionText": to_str(r["positionText"]),
+                "positionOrder": to_int(r["positionOrder"]),
+                "points": to_float(r["points"]),
+                "laps": to_int(r["laps"]),
+                "time": to_str(r["time"]),
+                "milliseconds": to_int(r["milliseconds"]),
+                "fastestLap": to_int(r["fastestLap"]),
+                "rank": to_int(r["rank"]),
+                "fastestLapTime": to_str(r["fastestLapTime"]),
+                "fastestLapSpeed": to_float(r["fastestLapSpeed"]),
+            }),
+        }
+        for r in read_csv("results.csv")
+    ]
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (n:Result {resultId: row.id})
+    SET n += row.props
+    WITH n, row
+    MATCH (race:Race {raceId: row.raceId})
+    MATCH (driver:Driver {driverId: row.driverId})
+    MATCH (cons:Constructor {constructorId: row.constructorId})
+    MATCH (st:Status {statusId: row.statusId})
+    MERGE (n)-[:FOR_RACE]->(race)
+    MERGE (n)-[:BY_DRIVER]->(driver)
+    MERGE (n)-[:FOR_CONSTRUCTOR]->(cons)
+    MERGE (n)-[:HAS_STATUS]->(st)
+    """
+    return run_batched(session, cypher, rows)
 
 
 def load_constructors(session):
@@ -250,7 +290,23 @@ def load_constructors(session):
     Renames: name -> constructor_name, nationality -> constructor_nationality
     Do not store url.
     """
-    raise NotImplementedError
+    rows = [
+        {
+            "id": to_int(r["constructorId"]),
+            "props": clean({
+                "constructorRef": to_str(r["constructorRef"]),
+                "constructor_name": to_str(r["name"]),
+                "constructor_nationality": to_str(r["nationality"]),
+            }),
+        }
+        for r in read_csv("constructors.csv")
+    ]
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (c:Constructor {constructorId: row.id})
+    SET c += row.props
+    """
+    return run_batched(session, cypher, rows)
 
 
 # =============================================================================
