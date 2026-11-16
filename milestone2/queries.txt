@@ -37,5 +37,16 @@ RETURN d.forename + ' ' + d.surname AS Driver, Starts, Avg_Finish, Wins
 ORDER BY Avg_Finish ASC, Wins DESC
 
 //5. Query 5
-MATCH (...)
-RETURN (...)
+MATCH (d:Driver)<-[:BY_DRIVER]-(res:Result)-[:FOR_RACE]->(:Race)-[:IN_SEASON]->(s:Season)
+WHERE s.year IN [2020, 2021]
+MATCH (res)-[:FOR_CONSTRUCTOR]->(c:Constructor)
+WITH d, s.year AS year, c.constructorId AS cid, count(res) AS entries
+ORDER BY entries DESC, cid ASC
+WITH d, year, collect(cid)[0] AS primary
+WITH d, collect({year: year, primary: primary}) AS seasons
+WHERE size(seasons) = 2
+WITH d, [x IN seasons WHERE x.year = 2020][0].primary AS p2020, [x IN seasons WHERE x.year = 2021][0].primary AS p2021
+WHERE p2020 <> p2021
+WITH d.forename + ' ' + d.surname AS name
+ORDER BY name
+RETURN count(name) AS Drivers_Changed, collect(name) AS Drivers
