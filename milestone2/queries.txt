@@ -1,10 +1,21 @@
 //1. Query 1
-MATCH (...)
-RETURN (...)
+MATCH (res:Result)-[:FOR_RACE]->(:Race)-[:IN_SEASON]->(:Season {year: 2021})
+MATCH (res)-[:BY_DRIVER]->(d:Driver)
+WITH d, sum(res.points) AS pts, sum(CASE WHEN res.positionOrder = 1 THEN 1 ELSE 0 END) AS wins
+RETURN d.forename + ' ' + d.surname AS Driver, pts AS Points, wins AS Wins
+ORDER BY Points DESC, Wins DESC
 
 //2. Query 2
-MATCH (...)
-RETURN (...)
+MATCH (res:Result)-[:FOR_RACE]->(r:Race)
+WHERE r.year >= 2014 AND r.year <= 2021
+MATCH (res)-[:FOR_CONSTRUCTOR]->(c:Constructor)
+MATCH (res)-[:HAS_STATUS]->(s:Status)
+WITH c, count(res) AS entries,
+     sum(CASE WHEN s.status = 'Finished' OR s.status STARTS WITH '+' THEN 1 ELSE 0 END) AS classified
+WHERE entries >= 100
+RETURN c.constructor_name AS Constructor, entries AS Entries, classified AS Classified,
+       toFloat(classified) / entries AS Reliability
+ORDER BY Reliability DESC
 
 //3. Query 3
 MATCH (h:Driver {driverId: 1})<-[:BY_DRIVER]-(rh:Result)-[:FOR_RACE]->(race:Race)<-[:FOR_RACE]-(rb:Result)-[:BY_DRIVER]->(b:Driver {driverId: 822}),
