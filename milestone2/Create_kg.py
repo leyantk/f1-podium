@@ -211,7 +211,38 @@ def load_qualifying(session):
     (Qualifying)-[:BY_DRIVER]->(Driver),
     (Qualifying)-[:FOR_CONSTRUCTOR]->(Constructor)
     """
-    raise NotImplementedError
+    rows = [
+        {
+            "id": to_int(r["qualifyId"]),
+            # Used only to find the parent nodes, never stored on the Qualifying.
+            "raceId": to_int(r["raceId"]),
+            "driverId": to_int(r["driverId"]),
+            "constructorId": to_int(r["constructorId"]),
+            "props": clean({
+                "number": to_int(r["number"]),
+                "position": to_int(r["position"]),
+                # Lap times stay strings ("1:26.572"); \N and empty cells become None,
+                # so clean() leaves the property out instead of storing them.
+                "q1": to_str(r["q1"]),
+                "q2": to_str(r["q2"]),
+                "q3": to_str(r["q3"]),
+            }),
+        }
+        for r in read_csv("qualifying.csv")
+    ]
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (q:Qualifying {qualifyId: row.id})
+    SET q += row.props
+    WITH q, row
+    MATCH (race:Race {raceId: row.raceId})
+    MATCH (driver:Driver {driverId: row.driverId})
+    MATCH (cons:Constructor {constructorId: row.constructorId})
+    MERGE (q)-[:FOR_RACE]->(race)
+    MERGE (q)-[:BY_DRIVER]->(driver)
+    MERGE (q)-[:FOR_CONSTRUCTOR]->(cons)
+    """
+    return run_batched(session, cypher, rows)
 
 
 def load_circuits(session):
@@ -224,7 +255,27 @@ def load_circuits(session):
     Renames: name -> circuit_name, location -> circuit_loc, country -> circuit_country
     Do not store url.
     """
-    raise NotImplementedError
+    rows = [
+        {
+            "id": to_int(r["circuitId"]),
+            "props": clean({
+                "circuitRef": to_str(r["circuitRef"]),
+                "circuit_name": to_str(r["name"]),
+                "circuit_loc": to_str(r["location"]),
+                "circuit_country": to_str(r["country"]),
+                "lat": to_float(r["lat"]),
+                "lng": to_float(r["lng"]),
+                "alt": to_int(r["alt"]),
+            }),
+        }
+        for r in read_csv("circuits.csv")
+    ]
+    cypher = """
+    UNWIND $rows AS row
+    MERGE (c:Circuit {circuitId: row.id})
+    SET c += row.props
+    """
+    return run_batched(session, cypher, rows)
 
 
 # =============================================================================
