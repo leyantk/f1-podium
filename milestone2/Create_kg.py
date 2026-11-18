@@ -72,10 +72,11 @@ def _is_missing(value):
     return value is None or value.strip() in ("", "\\N")
 
 def to_str(value):
-    """String property. None for missing; otherwise the raw value, unstripped."""
+    """String property. None for missing; otherwise the value with edge spaces trimmed
+    (instructor, Piazza: store "Argentinian", not "Argentinian ")."""
     if _is_missing(value):
         return None
-    return value  
+    return value.strip()
 
 def to_int(value):
     """Return an int, or None if the value is missing."""
